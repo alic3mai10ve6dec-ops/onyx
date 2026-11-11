@@ -940,8 +940,10 @@ type NodeInfo struct {
 	MemReserveMiB  uint64
 	MemStartingMiB uint64
 	Drain          DrainStatus
-	// MaxVMs is the VM cap (--max-vms); 0 is no cap.
-	MaxVMs int
+	// MaxVMs is the VM cap (--max-vms); 0 is no cap. VMSlotsUsed is what
+	// the cap counts.
+	MaxVMs      int
+	VMSlotsUsed int
 }
 
 // NodeInfo returns the node capacity, versions and templates.
@@ -961,6 +963,7 @@ func (m *Manager) NodeInfo() (NodeInfo, error) {
 	m.rescanForDrain()
 	m.mu.Lock()
 	n := m.liveVMsLocked()
+	slots := m.vmSlotsUsedLocked()
 	starting := m.startingMiBLocked()
 	drain := m.drainStatusLocked()
 	m.mu.Unlock()
@@ -968,7 +971,7 @@ func (m *Manager) NodeInfo() (NodeInfo, error) {
 		MemTotalMiB: total, MemAvailableMiB: avail, DiskFreeMiB: free >> 20,
 		VMCount: n, Templates: tpls, Versions: m.versions,
 		MemReserveMiB: m.cfg.MinFreeMemMiB, MemStartingMiB: starting, Drain: drain,
-		MaxVMs: m.cfg.MaxVMs,
+		MaxVMs: m.cfg.MaxVMs, VMSlotsUsed: slots,
 	}, nil
 }
 
