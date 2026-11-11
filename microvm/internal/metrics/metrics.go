@@ -44,6 +44,8 @@ type Source struct {
 	// PrivateMem returns the private memory bytes of a Firecracker process
 	// (hostinfo.PrivateMemoryBytes). Nil: not reported.
 	PrivateMem func(pid int) (uint64, error)
+	// MaxVMs is the VM cap (--max-vms); 0 is no cap.
+	MaxVMs int
 }
 
 // Metrics are the agent's metrics on their own registry.
@@ -326,6 +328,7 @@ type stateCollector struct {
 	relayOpen   *prometheus.Desc
 	dialOpen    *prometheus.Desc
 	statsFailed *prometheus.Desc
+	maxVMs      *prometheus.Desc
 }
 
 func newStateCollector(src Source) *stateCollector {
@@ -345,12 +348,13 @@ func newStateCollector(src Source) *stateCollector {
 		relayOpen:   d("relay_open_connections", "Open egress relay connections."),
 		dialOpen:    d("dial_open_streams", "Open Dial streams."),
 		statsFailed: d("node_stats_errors", "1 if the last scrape could not read node memory, disk, or the private memory of a VM.", "stat"),
+		maxVMs:      d("max_vms", "The VM cap (--max-vms); 0 is no cap."),
 	}
 }
 
 func (c *stateCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
-		c.vms, c.memTotal, c.memAvail, c.diskFree, c.memAlloc, c.memPrivate, c.vcpuAlloc, c.relayOpen, c.dialOpen, c.statsFailed,
+		c.vms, c.memTotal, c.memAvail, c.diskFree, c.memAlloc, c.memPrivate, c.vcpuAlloc, c.relayOpen, c.dialOpen, c.statsFailed, c.maxVMs,
 	} {
 		ch <- d
 	}
@@ -365,6 +369,7 @@ func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
 	gauge := func(d *prometheus.Desc, v float64, labels ...string) {
 		ch <- prometheus.MustNewConstMetric(d, prometheus.GaugeValue, v, labels...)
 	}
+	gauge(c.maxVMs, float64(c.src.MaxVMs))
 	if c.src.VMs != nil {
 		counts := map[pb.VMState]int{}
 		var mem, vcpus, private uint64
