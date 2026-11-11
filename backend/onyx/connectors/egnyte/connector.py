@@ -113,7 +113,7 @@ def normalize_folder_path(folder_path: str | None) -> str:
 
 
 def _is_under(path: str, folder_path: str) -> bool:
-    return folder_path == "/" or path.startswith(folder_path + "/")
+    return folder_path == "/" or path.lower().startswith(folder_path.lower() + "/")
 
 
 def _app_base(domain: str) -> str:
@@ -623,13 +623,14 @@ class EgnyteConnector(
         )
 
     def _ancestor_paths(self, file_path: str) -> list[str]:
-        """The folders from the configured folder down to the file's own."""
-        parent = file_path.rsplit("/", 1)[0] or "/"
-        paths = [self.folder_path]
-        for name in parent.removeprefix(self.folder_path).strip("/").split("/"):
-            if name:
-                paths.append(f"{paths[-1].rstrip('/')}/{name}")
-        return paths
+        """The folders from the configured folder down to the file's own, in
+        Egnyte's own case, which the configured path may not match."""
+        top_depth = len([name for name in self.folder_path.split("/") if name])
+        parents = [name for name in file_path.split("/") if name][:-1]
+        return [
+            "/" + "/".join(parents[:depth])
+            for depth in range(top_depth, len(parents) + 1)
+        ]
 
     def _reindex_document(
         self,
@@ -649,7 +650,11 @@ class EgnyteConnector(
         except EgnyteApiError as e:
             if e.status_code != 404:
                 raise
-            # Deleted: nothing to index, and pruning removes the document.
+            # The retry worker reads a missing result as a new failure, so
+            # the reason is given. Pruning removes the document.
+            yield _reindex_failure(
+                document_id, f"Egnyte file {document_id} was deleted.", e
+            )
             return
         if not _is_under(file.path, self.folder_path):
             yield _reindex_failure(
@@ -657,7 +662,7 @@ class EgnyteConnector(
                 f"Egnyte file {file.path} is outside {self.folder_path}.",
             )
             return
-        if not _is_indexable(file):
+        if not is_indexable(file):
             yield _reindex_failure(
                 document_id, f"Egnyte file {file.path} is not a supported type."
             )
