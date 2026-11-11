@@ -72,6 +72,10 @@ It does not own:
 
 ## Architecture
 
+**UI preferences.** Boolean `User` columns store small interface choices, such
+as `paste_as_tile` and `interrupt_on_send`. Each has its own `PATCH` endpoint in
+`server/manage/users.py` and a flat field in `UserPreferences`.
+
 **From setting to prompt.** `db/memory.py:get_memories` builds one
 `UserMemoryContext` per turn, called from
 `chat/process_message.py:prepare_chat_turn` ([[core-chat-loop]]). Nothing is

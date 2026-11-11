@@ -54,7 +54,13 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import LargeBinary, TypeDecorator
 from typing_extensions import TypedDict  # noreorder
 
-from onyx.agents.models import ExecutionStatus, RunFailure, RunStatus
+from onyx.agents.models import (
+    ExecutionStatus,
+    InputSource,
+    MessageDelivery,
+    RunFailure,
+    RunStatus,
+)
 from onyx.auth.schemas import UserRole
 from onyx.coding_agent.models import CodingAgentCallResult
 from onyx.configs.constants import (
@@ -523,6 +529,9 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
 
     # Input preferences
     paste_as_tile: Mapped[bool] = mapped_column(Boolean, default=False)
+    interrupt_on_send: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
 
     # Voice preferences
     voice_auto_send: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -3629,7 +3638,7 @@ class ChatMessage(Base):
     # Parent message pointer for the tree structure, nullable because the first message is
     # an empty root node to allow edits on the first message of a session.
     parent_message_id: Mapped[int | None] = mapped_column(
-        ForeignKey("chat_message.id"), nullable=True
+        ForeignKey("chat_message.id"), nullable=True, index=True
     )
     # This only maps to the latest because only that message chain is needed.
     # It can be updated as needed to trace other branches.
@@ -3746,6 +3755,15 @@ class ChatMessage(Base):
     )
 
 
+class AcceptedChatInput(BaseModel):
+    """A message a model generation accepted, with its provenance."""
+
+    id: str
+    source: InputSource
+    source_run_id: str | None = None
+    content: str
+
+
 class ChatResponseItem(Base):
     """One recorded model generation and its display settings."""
 
@@ -3773,6 +3791,12 @@ class ChatResponseItem(Base):
     message: Mapped[AssistantMessage] = mapped_column(
         PydanticType(AssistantMessage, sanitize_strings=True, none_as_null=True),
     )
+    # Messages this generation accepted before it started, in model order.
+    inputs: Mapped[list[AcceptedChatInput]] = mapped_column(
+        PydanticListType(AcceptedChatInput),
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     generation_status: Mapped[ExecutionStatus] = mapped_column(
         Enum(
             ExecutionStatus,
@@ -3790,6 +3814,70 @@ class ChatResponseItem(Base):
         "ChatMessage",
         back_populates="response_items",
         foreign_keys=[chat_message_id],
+    )
+
+
+class ChatInput(Base):
+    """A pending message for an agent session; consuming it deletes the row.
+
+    `agent_result` rows exist from the child response's reservation and become
+    readable when it finishes. Rows from child agents name the root response of
+    the invocation, which decides branch visibility.
+    """
+
+    __tablename__ = "chat_input"
+    __table_args__ = (
+        CheckConstraint(
+            "(source = 'human' AND delivery IN ('send', 'queue', 'interrupt') "
+            "AND invoking_tool_call_id IS NULL AND max_steps IS NULL "
+            "AND root_response_id IS NULL) OR "
+            "(source = 'agent' AND delivery IN ('send', 'queue') "
+            "AND invoking_tool_call_id IS NOT NULL AND max_steps > 0 "
+            "AND root_response_id IS NOT NULL) OR "
+            "(source = 'agent_result' AND delivery IS NULL "
+            "AND source_response_id IS NOT NULL AND root_response_id IS NOT NULL)",
+            name="ck_chat_input_source",
+        ),
+        Index("ix_chat_input_recipient", "recipient_session_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipient_session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("chat_session.id", ondelete="CASCADE")
+    )
+    message_id: Mapped[str] = mapped_column(String)
+    source: Mapped[InputSource] = mapped_column(
+        Enum(
+            InputSource,
+            native_enum=False,
+            values_callable=lambda values: [v.value for v in values],
+        )
+    )
+    invoking_tool_call_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tool_call.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    source_response_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_message.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    target_response_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_message.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    root_response_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_message.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    delivery: Mapped[MessageDelivery | None] = mapped_column(
+        Enum(
+            MessageDelivery,
+            native_enum=False,
+            values_callable=lambda values: [v.value for v in values],
+        ),
+        nullable=True,
+    )
+    content: Mapped[str] = mapped_column(Text)
+    max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_timeout_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    invoking_tool_call: Mapped["ToolCall | None"] = relationship(
+        "ToolCall", foreign_keys=[invoking_tool_call_id]
     )
 
 
@@ -3845,7 +3933,7 @@ class ToolCall(Base):
     # If this is not None, it's a top level tool call from the user message
     # If this is None, it's a lower level call from another tool/agent
     parent_chat_message_id: Mapped[int | None] = mapped_column(
-        ForeignKey("chat_message.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("chat_message.id", ondelete="CASCADE"), nullable=True, index=True
     )
     # If this is not None, this tool call is a child of another tool call
     parent_tool_call_id: Mapped[int | None] = mapped_column(
