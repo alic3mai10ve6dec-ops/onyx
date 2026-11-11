@@ -21,11 +21,9 @@ annotations:
       image: docker.io/onyxdotapp/onyx-backend:latest
   artifacthub.io/changes: |
     - kind: added
-      description: Craft Firecracker host agent Grafana dashboard
-        (monitoring.grafana.dashboards.enabled) and alert rules
-        (monitoring.prometheusRules.enabled, thresholds in
-        craft.hostAgent.alerts). Both need the agent metrics and are off by
-        default.
+      description: Craft Firecracker host agent VM cap per node
+        (craft.hostAgent.maxVms, default 60 for nested virtualization). Raise
+        it or set 0 (no cap) on bare metal nodes.
 dependencies:
   # Helm uses the first condition path that exists: `postgresqlOperator.enabled`
   # is unset by default, so this falls through to `postgresql.enabled`. Set it
