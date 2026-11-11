@@ -21,11 +21,10 @@ annotations:
       image: docker.io/onyxdotapp/onyx-backend:latest
   artifacthub.io/changes: |
     - kind: added
-      description: Craft Firecracker host agent Grafana dashboard
-        (monitoring.grafana.dashboards.enabled) and alert rules
-        (monitoring.prometheusRules.enabled, thresholds in
-        craft.hostAgent.alerts). Both need the agent metrics and are off by
-        default.
+      description: Docconversion Celery worker (celery_worker_docconversion,
+        off by default) with HPA or KEDA autoscaling, a metrics Service,
+        ServiceMonitor and PDB. Enabling it also sets ENABLE_CONVERSION_STAGE
+        on the docfetching worker.
 dependencies:
   # Helm uses the first condition path that exists: `postgresqlOperator.enabled`
   # is unset by default, so this falls through to `postgresql.enabled`. Set it
