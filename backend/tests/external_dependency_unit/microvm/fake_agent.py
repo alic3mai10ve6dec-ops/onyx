@@ -116,6 +116,8 @@ class FakeHostAgent(hostagent_pb2_grpc.HostAgentServicer):
         ]
         self.vms: dict[str, hostagent_pb2.VM] = {}
         self.refuse_create: HostAgentErrorReason | None = None
+        # With refuse_create: refuse only this many more Creates (None: all).
+        self.refuse_create_times: int | None = None
         self.next_generation = 1_000
         self.create_calls = 0
         self.stop_calls: list[tuple[str, int, int]] = []
@@ -149,6 +151,8 @@ class FakeHostAgent(hostagent_pb2_grpc.HostAgentServicer):
         self.cancel_calls: list[str] = []
         # Seconds each Create waits before it runs (to overlap two wakes).
         self.create_delay_seconds = 0.0
+        # Start fails with TOO_MANY_EXECUTIONS at this many running commands.
+        self.max_running: int | None = None
         # Seconds each guest daemon Init waits before it runs.
         self.init_delay_seconds = 0.0
         # Seconds each Stop waits before it runs.
@@ -192,7 +196,9 @@ class FakeHostAgent(hostagent_pb2_grpc.HostAgentServicer):
             self.create_requests.append(
                 (request.sandbox_id, request.attempt, request.sandboxd_key)
             )
-            if self.refuse_create is not None:
+            if self.refuse_create is not None and self.refuse_create_times != 0:
+                if self.refuse_create_times is not None:
+                    self.refuse_create_times -= 1
                 abort_with_reason(context, self.refuse_create, "refused by the test")
             existing = self.vms.get(request.sandbox_id)
             if existing is not None:
@@ -721,6 +727,15 @@ class FakeSandboxd(sandboxd_pb2_grpc.SandboxdServicer):
             script = shlex.split(argv[2])
         if not script or script[0] not in ("echo", "fail", "cat", "sleep", "mkdir"):
             abort_daemon(context, SandboxDaemonErrorReason.START_FAILED, "no program")
+        running = sum(
+            1
+            for e in self.agent.executions.get(sandbox_id, {}).values()
+            if e.result is None
+        )
+        if self.agent.max_running is not None and running >= self.agent.max_running:
+            abort_daemon(
+                context, SandboxDaemonErrorReason.TOO_MANY_EXECUTIONS, "too many"
+            )
         execution = FakeExecution(
             execution_id=self.agent.next_id("exec"),
             argv=argv,
