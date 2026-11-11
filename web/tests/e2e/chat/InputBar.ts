@@ -28,6 +28,10 @@ export class InputBar {
   readonly textbox: Locator;
   readonly sendButton: Locator;
   readonly processingFileChips: Locator;
+  readonly queuedMessages: Locator;
+  readonly pendingMessageHint: Locator;
+  readonly subagentActivity: Locator;
+  readonly composerSendNowButton: Locator;
 
   readonly tile: Locator;
   readonly tileRemoveButton: Locator;
@@ -44,6 +48,15 @@ export class InputBar {
     this.textbox = page.locator("#onyx-chat-input-textbox");
     this.sendButton = page.locator("#onyx-chat-input-send-button");
     this.processingFileChips = this.container.getByText("Processing...");
+    this.subagentActivity = page.getByTestId("subagent-activity");
+    this.queuedMessages = page.getByTestId("queued-message-bar");
+    this.pendingMessageHint = this.container.getByTestId(
+      "pending-message-hint"
+    );
+    this.composerSendNowButton = this.container.getByRole("button", {
+      name: "Send now",
+      exact: true,
+    });
 
     this.tile = page.locator("[data-rich-tile]");
     this.tileRemoveButton = page.locator("[data-rich-tile-remove]");
@@ -173,6 +186,44 @@ export class InputBar {
     await this.page.keyboard.press("Enter");
   }
 
+  async queue(): Promise<void> {
+    await this.textbox.press("ControlOrMeta+Enter");
+  }
+
+  async selectPreviousPending(): Promise<void> {
+    await this.textbox.press("ArrowUp");
+  }
+
+  async discardSelectedPending(): Promise<void> {
+    await this.textbox.press("Delete");
+  }
+
+  async submitPending(
+    text: string,
+    delivery: "queue" | "send" = "queue"
+  ): Promise<void> {
+    await this.textbox.fill(text);
+    if (delivery === "queue") await this.queue();
+    else await this.send();
+    await expect(this.textbox).toHaveText("");
+    // The composer holds new input until the server accepts this one.
+    await expect(
+      this.queuedMessages.getByText(text, { exact: true })
+    ).toBeVisible();
+  }
+
+  async discardPending(index: number): Promise<void> {
+    await this.queuedMessages.nth(index).click();
+    await this.discardSelectedPending();
+  }
+
+  async editPending(index: number): Promise<void> {
+    await this.queuedMessages
+      .nth(index)
+      .getByRole("button", { name: "Edit queued message", exact: true })
+      .click();
+  }
+
   async clickSend(): Promise<void> {
     await this.sendButton.click();
   }
@@ -223,6 +274,12 @@ export class InputBar {
         timeout: 10000,
       });
     }
+  }
+
+  /** An empty composer disables send only while the chat is idle; a running turn shows Stop. */
+  async expectIdle(timeout = POLL_TIMEOUT): Promise<void> {
+    await expect(this.textbox).toHaveAttribute("data-empty", "");
+    await expect(this.sendButton).toBeDisabled({ timeout });
   }
 
   async expectEmpty(): Promise<void> {

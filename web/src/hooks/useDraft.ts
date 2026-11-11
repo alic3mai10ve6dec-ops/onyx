@@ -62,6 +62,7 @@ export function useDraft<T>({
     null
   );
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writeRef = useRef<(() => void) | null>(null);
   const isEmptyRef = useRef(isEmpty);
 
   useEffect(() => {
@@ -93,6 +94,18 @@ export function useDraft<T>({
     };
   }, [key]);
 
+  // A page unload skips React cleanup, so write the pending value before the
+  // timer is lost.
+  useEffect(() => {
+    const flush = () => {
+      if (timerRef.current === null) return;
+      clearTimeout(timerRef.current);
+      writeRef.current?.();
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
+
   const save = useCallback(
     (value: T) => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
@@ -111,7 +124,10 @@ export function useDraft<T>({
         }
       };
       if (debounceMs === 0) write();
-      else timerRef.current = setTimeout(write, debounceMs);
+      else {
+        writeRef.current = write;
+        timerRef.current = setTimeout(write, debounceMs);
+      }
     },
     [key, debounceMs]
   );

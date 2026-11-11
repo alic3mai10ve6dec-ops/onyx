@@ -122,6 +122,9 @@
       "authenticate": {
         "label": "Autenticar"
       },
+      "codingAgentIncognito": {
+        "tooltip": "O agente de código não está disponível no modo anônimo"
+      },
       "configure": {
         "tooltip": "Configurar"
       },
@@ -12424,6 +12427,7 @@
     },
     "input": {
       "appInputBar": {
+        "subagentsWorking": "Subagentes trabalhando",
         "attachFilesButton": {
           "tooltip": "Anexar arquivos"
         },
@@ -12432,6 +12436,7 @@
         },
         "deepResearchButton": {
           "disabledTooltip": "A pesquisa profunda está desativada no modo multimodelo",
+          "incognitoTooltip": "A pesquisa profunda não está disponível no modo anônimo",
           "label": "Pesquisa profunda"
         },
         "incognitoNotice": {
@@ -12460,6 +12465,19 @@
         "voiceSetupButton": {
           "ariaLabel": "Configurar voz",
           "tooltip": "A voz não está configurada. Configure nas configurações de administração."
+        },
+        "pendingMessages": {
+          "keyboardHint": "Enter para enviar · Ctrl ou Command + Enter para enfileirar",
+          "preparingHint": "Você pode colocar mensagens na fila quando a resposta começar.",
+          "attachmentsHint": "Envie os arquivos anexados após esta resposta terminar.",
+          "chooseResponseHint": "Escolha uma resposta antes de colocar uma mensagem na fila.",
+          "incognitoHint": "Aguarde a resposta terminar no chat anônimo.",
+          "sendHint": "Enviar na próxima etapa desta resposta",
+          "interruptHint": "Interromper o trabalho atual e enviar esta mensagem",
+          "sendLabel": "Enviar",
+          "queueLabel": "Fila",
+          "interruptKeyboardHint": "Enter para interromper · Ctrl ou Command + Enter para enfileirar",
+          "interruptLabel": "Interromper"
         }
       },
       "baseInputBar": {
@@ -12568,6 +12586,17 @@
         },
         "removeHint": {
           "label": "remover"
+        },
+        "editButton": {
+          "tooltip": "Editar mensagem na fila",
+          "clearDraftTooltip": "Limpe seu rascunho para editar uma mensagem na fila"
+        },
+        "sendButton": {
+          "label": "Enviar agora",
+          "tooltip": "Interromper o trabalho atual e enviar esta mensagem"
+        },
+        "sendHint": {
+          "label": "enviar agora ·"
         }
       },
       "sharedAppInputBar": {
@@ -12577,6 +12606,13 @@
         "startSessionButton": {
           "label": "Iniciar nova sessão"
         }
+      },
+      "pendingMessages": {
+        "submitFailed": "Não foi possível enviar a mensagem.",
+        "withdrawFailed": "Não foi possível remover a mensagem pendente.",
+        "loadFailed": "Não foi possível carregar as mensagens pendentes.",
+        "alreadyAccepted": "Esta mensagem já foi aceita e não está mais pendente.",
+        "interruptFailed": "Não foi possível enviar esta mensagem agora. Ela continua pendente."
       }
     },
     "mcpApiKey": {
@@ -12672,6 +12708,9 @@
         "timedOut": {
           "text": "A resposta parou porque atingiu o limite de tempo."
         }
+      },
+      "agentResults": {
+        "received": "Resultados dos subagentes recebidos"
       },
       "codeBlock": {
         "copyButton": {
@@ -16418,6 +16457,12 @@
       "title": "Chats",
       "toasts": {
         "saveFailed": "Falha ao salvar preferências"
+      },
+      "sendBehavior": {
+        "title": "Comportamento de Envio Durante o Trabalho",
+        "description": "Escolha o que Enter e o botão de envio fazem durante uma resposta. Ctrl/Cmd+Enter sempre coloca uma mensagem na fila.",
+        "afterStep": "Após a etapa atual",
+        "interrupt": "Interromper o trabalho atual"
       }
     },
     "connectors": {
