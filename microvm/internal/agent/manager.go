@@ -313,6 +313,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (VM, bool, erro
 	if err := m.checkDoubt(ctx, req.SandboxID, true); err != nil {
 		return VM{}, false, err
 	}
+	m.rescanAtCap()
 
 	for {
 		m.mu.Lock()
@@ -594,6 +595,22 @@ func (m *Manager) vmSlotsUsedLocked() int {
 		n += max(1, len(d.uids))
 	}
 	return n
+}
+
+// rescanAtCap scans the processes again when processes in doubt hold slots
+// of a node at its cap, so a doubt whose process exited frees its slot.
+func (m *Manager) rescanAtCap() {
+	m.mu.Lock()
+	need := m.cfg.MaxVMs > 0 && len(m.doubt) > 0 && m.vmSlotsUsedLocked() >= m.cfg.MaxVMs
+	m.mu.Unlock()
+	if !need || m.adopter == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.rescan(ctx); err != nil {
+		m.log.Error("process scan at the VM cap failed", "err", err)
+	}
 }
 
 // admitSlotLocked refuses a new VM when the node runs MaxVMs. On nested
@@ -900,6 +917,7 @@ func (m *Manager) BuildSlot(id string, memMiB uint32) (uint32, func(left bool), 
 	if err := m.checkDoubt(context.Background(), id, true); err != nil {
 		return 0, nil, err
 	}
+	m.rescanAtCap()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.building[id]; ok || m.vms[id] != nil || m.doubt[id] != nil {
@@ -967,6 +985,7 @@ func (m *Manager) NodeInfo() (NodeInfo, error) {
 		return NodeInfo{}, err
 	}
 	m.rescanForDrain()
+	m.rescanAtCap()
 	m.mu.Lock()
 	n := m.liveVMsLocked()
 	slots := m.vmSlotsUsedLocked()
