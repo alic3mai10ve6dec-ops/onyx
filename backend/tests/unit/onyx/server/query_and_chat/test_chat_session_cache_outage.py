@@ -36,6 +36,10 @@ def test_saved_session_loads_when_processing_cache_is_unavailable(
             return_value=[],
         ),
         patch(
+            "onyx.server.query_and_chat.chat_backend.has_chat_inputs",
+            return_value=False,
+        ),
+        patch(
             "onyx.server.query_and_chat.chat_backend.get_cache_backend",
             return_value=cache,
             side_effect=ConnectionError("Cache unavailable")

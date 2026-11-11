@@ -27,6 +27,7 @@ from sqlalchemy.sql.selectable import CTE
 from onyx.agents.models import CompactionCheckpoint, RunFailureKind, RunStatus
 from onyx.chat.errors import chat_error
 from onyx.chat.models import (
+    ChatBranch,
     HistoryLink,
     MessageRendering,
     PresentationMode,
@@ -74,6 +75,8 @@ FILE_CLEANUP_BATCH_SIZE = 500
 MAX_AGENT_HISTORY_RUNS = 512
 MAX_AGENT_DEPTH = 8
 MAX_CONVERSATION_MESSAGES = 8192
+CHAT_RESPONSE_STATEMENT_TIMEOUT_MS = 30_000
+CHAT_RESPONSE_LOCK_TIMEOUT_MS = 5_000
 
 
 def visible_chat_messages_filter() -> ColumnElement[bool]:
@@ -892,6 +895,28 @@ def get_or_create_root_message(
         return new_root_message
 
 
+def configure_response_transaction__no_commit(session: Session) -> None:
+    """Bound database waits while a response holds its execution lease."""
+    session.execute(
+        select(
+            func.set_config(
+                "statement_timeout",
+                str(CHAT_RESPONSE_STATEMENT_TIMEOUT_MS),
+                True,
+            )
+        )
+    )
+    session.execute(
+        select(
+            func.set_config(
+                "lock_timeout",
+                str(CHAT_RESPONSE_LOCK_TIMEOUT_MS),
+                True,
+            )
+        )
+    )
+
+
 def reserve_chat_response_ids(
     db_session: Session,
     chat_session_id: UUID,
@@ -901,6 +926,13 @@ def reserve_chat_response_ids(
     """Reserve assistant responses and select the last response as the active branch."""
     if not model_display_names:
         raise ValueError("At least one response model is required")
+    configure_response_transaction__no_commit(db_session)
+    # Queue submission and response reservation share the session-first lock order.
+    db_session.execute(
+        select(ChatSession.id)
+        .where(ChatSession.id == chat_session_id)
+        .with_for_update(key_share=True)
+    )
     reserved: list[ChatMessage] = []
     for display_name in model_display_names:
         msg = ChatMessage(
@@ -1580,6 +1612,62 @@ def find_summary_for_branch(
     )
 
 
+def get_selected_branch(
+    session: Session, chat_session_id: UUID
+) -> tuple[ChatMessage | None, ChatBranch]:
+    """Return the selected latest response and the message IDs on its branch."""
+    branch = (
+        select(
+            ChatMessage.id,
+            ChatMessage.latest_child_message_id,
+            literal(0).label("depth"),
+        )
+        .where(
+            ChatMessage.chat_session_id == chat_session_id,
+            ChatMessage.parent_message_id.is_(None),
+        )
+        .cte("selected_branch", recursive=True)
+    )
+    branch = branch.union_all(
+        select(
+            ChatMessage.id,
+            ChatMessage.latest_child_message_id,
+            branch.c.depth + 1,
+        )
+        .join(branch, ChatMessage.id == branch.c.latest_child_message_id)
+        .where(
+            ChatMessage.chat_session_id == chat_session_id,
+            branch.c.depth < MAX_CONVERSATION_MESSAGES,
+        )
+    )
+    message_ids = list(
+        session.scalars(select(branch.c.id).order_by(branch.c.depth.desc()))
+    )
+    # Follow only IDs; queue checks do not need response content or tool results.
+    selected = (
+        session.scalar(
+            select(ChatMessage)
+            .where(
+                ChatMessage.id == message_ids[0],
+                ChatMessage.message_type == MessageType.ASSISTANT,
+            )
+            .options(
+                load_only(
+                    ChatMessage.id,
+                    ChatMessage.chat_session_id,
+                    ChatMessage.parent_message_id,
+                    ChatMessage.response_status,
+                )
+            )
+        )
+        if message_ids
+        else None
+    )
+    return selected, ChatBranch(
+        chat_session_id=chat_session_id, message_ids=message_ids
+    )
+
+
 def visible_message_ids(db_session: Session, message: ChatMessage) -> list[int]:
     """Return the selected ancestry, including the current response."""
     ancestry = (
@@ -1657,10 +1745,11 @@ def session_ancestors(
     return {row.id: row for row in rows}
 
 
-def agent_path_from_ancestors(
+def agent_ancestor_chain(
     agent_id: UUID, ancestors: dict[UUID, SessionAncestor]
-) -> str:
-    segments: list[str] = []
+) -> list[SessionAncestor]:
+    """Return this agent and its parents, with a complete and acyclic ancestry."""
+    chain: list[SessionAncestor] = []
     visited: set[UUID] = set()
     current: UUID | None = agent_id
     while current is not None:
@@ -1670,8 +1759,18 @@ def agent_path_from_ancestors(
         ancestor = ancestors.get(current)
         if ancestor is None:
             raise ValueError("Agent parent is unavailable")
-        segments.append(ancestor.agent_name or "root")
+        chain.append(ancestor)
         current = ancestor.parent_id
+    return chain
+
+
+def agent_path_from_ancestors(
+    agent_id: UUID, ancestors: dict[UUID, SessionAncestor]
+) -> str:
+    segments = [
+        ancestor.agent_name or "root"
+        for ancestor in agent_ancestor_chain(agent_id, ancestors)
+    ]
     return "/" + "/".join(reversed(segments))
 
 
@@ -1683,6 +1782,12 @@ def agent_session_path(db_session: Session, agent: ChatSession) -> str:
     )
 
 
+def response_invocation(response: ChatMessage) -> ToolCall | None:
+    """The tool call that started a child response; its question records it."""
+    question = response.parent_message
+    return question.invoking_tool_call if question is not None else None
+
+
 def root_response_id(db_session: Session, response: ChatMessage) -> int:
     current = response
     visited: set[int] = set()
@@ -1690,8 +1795,7 @@ def root_response_id(db_session: Session, response: ChatMessage) -> int:
         if current.id in visited or len(visited) >= MAX_AGENT_DEPTH:
             raise ValueError("Child response hierarchy is cyclic or too deep")
         visited.add(current.id)
-        question = current.parent_message
-        invocation = question.invoking_tool_call if question else None
+        invocation = response_invocation(current)
         if invocation is None or invocation.parent_chat_message_id is None:
             raise ValueError("Child response is missing its invocation")
         parent = db_session.get(ChatMessage, invocation.parent_chat_message_id)

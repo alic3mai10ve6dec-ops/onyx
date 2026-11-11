@@ -168,6 +168,7 @@ from onyx.tools.models import (
 )
 from onyx.tools.tool_implementations.code_mode.models import CodeModeExecutionResult
 from onyx.tools.tool_implementations.images.models import FinalImageGenerationResponse
+from onyx.tools.tool_implementations.subagents.models import ChatConfiguration
 from onyx.tools.tool_implementations.web_search.models import WebContentProviderConfig
 from onyx.utils.encryption import decrypt_bytes_to_string, encrypt_string_to_bytes
 from onyx.utils.headers import HeaderItemDict
@@ -3485,8 +3486,13 @@ class ChatSession(Base):
         ForeignKey("chat_message.id", ondelete="CASCADE"), nullable=True, index=True
     )
     agent_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    restoration_config: Mapped[ResearchConfiguration | None] = mapped_column(
-        PydanticType(ResearchConfiguration, sanitize_strings=True), nullable=True
+    restoration_config: Mapped[ResearchConfiguration | ChatConfiguration | None] = (
+        mapped_column(
+            PydanticType(
+                ResearchConfiguration | ChatConfiguration, sanitize_strings=True
+            ),
+            nullable=True,
+        )
     )
     user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("user.id", ondelete="CASCADE"), nullable=True
@@ -3531,12 +3537,10 @@ class ChatSession(Base):
         "UserProject", back_populates="chat_sessions", foreign_keys=[project_id]
     )
 
-    # the latest "overrides" specified by the user. These take precedence over
-    # the attached persona. However, overrides specified directly in the
-    # `send-message` call will take precedence over these.
-    # NOTE: currently only used by the chat seeding flow, will be used in the
-    # future once we allow users to override default values via the Chat UI
-    # itself
+    # The latest model override the user chose: set by chat seeding and by each
+    # single-model turn the user sends. It takes precedence over the persona,
+    # and turns the server starts use it. Overrides in a `send-message` call
+    # take precedence over it.
     llm_override: Mapped[LLMOverride | None] = mapped_column(
         PydanticType(LLMOverride), nullable=True
     )

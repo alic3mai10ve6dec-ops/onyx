@@ -25,7 +25,15 @@ from onyx.llm.models import (
     ToolDefinition,
     ToolResult,
     ToolResultMessage,
+    UserMessage,
 )
+
+AGENT_RESULT_MESSAGE_PREFIX = "agent-result:"
+
+
+def agent_result_message_id(run_id: str) -> str:
+    """The inbox identity of a finished run's result for its spawner."""
+    return f"{AGENT_RESULT_MESSAGE_PREFIX}{run_id}"
 
 
 class RunStatus(str, Enum):
@@ -69,16 +77,62 @@ class RunFailure(BaseModel):
     llm_error: LLMErrorInfo | None = None
 
 
+class AgentCompletion(BaseModel):
+    """A background agent's saved terminal result, ready for its parent to receive."""
+
+    agent_id: str
+    agent_path: str
+    run_id: str
+    status: RunStatus
+    output: AssistantMessage | None = None
+    failure: RunFailure | None = None
+
+    @property
+    def message_id(self) -> str:
+        return agent_result_message_id(self.run_id)
+
+
 class InputSource(str, Enum):
     HUMAN = "human"
     AGENT = "agent"
     AGENT_RESULT = "agent_result"
 
 
+class InputMessageMetadata(BaseModel):
+    """Input provenance survives flattened conversation history and compaction.
+
+    Content metadata reaches step preparation only; accepted history omits it.
+    """
+
+    type: Literal["agent_input"] = "agent_input"
+    source: InputSource
+    source_run_id: str | None = None
+    content_metadata: SerializeAsAny[BaseModel] | None = None
+
+
 class MessageDelivery(str, Enum):
     SEND = "send"
     QUEUE = "queue"
     INTERRUPT = "interrupt"
+
+
+class AgentMessageReceipt(BaseModel):
+    """A stored instruction and the run it targets; None starts a new run."""
+
+    id: str
+    run_id: str | None = None
+
+
+class AgentMessageRequest(BaseModel):
+    agent_id: str
+    parent_id: str
+    message: UserMessage
+    delivery: Literal[MessageDelivery.SEND, MessageDelivery.QUEUE]
+    max_steps: int = Field(gt=0)
+    total_timeout_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    parent_run_id: str
+    parent_message_id: str
+    parent_tool_call_id: str
 
 
 class ContextBudget(BaseModel):
@@ -133,10 +187,11 @@ class CompactionMetadata(BaseModel):
 
 
 class PreparedStep(BaseModel):
-    """Step settings; permissions restrict the configured tools without changing schemas."""
+    """Incoming messages and generation settings; permissions preserve tool schemas."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True, frozen=True)
     system_prompt: str = ""
+    input_messages: list[UserMessage] | None = None
     allowed_tool_names: frozenset[str] | None = None
     tool_phase: str | None = None
     options: GenerationOptions = Field(default_factory=GenerationOptions)
@@ -202,6 +257,7 @@ class StepInput(BaseModel):
     messages: list[Message]
     step: AgentStep
     previous: StepResult | None = None
+    received_inputs: list[UserMessage] = Field(default_factory=list)
 
 
 class RunResult(BaseModel):
@@ -225,6 +281,7 @@ class RunAction(str, Enum):
     PREPARE = "prepare"
     TOOLS = "tools"
     AFTER_STEP = "after_step"
+    WAIT_CHILDREN = "wait_children"
     FINISH = "finish"
 
 
@@ -238,10 +295,11 @@ class ToolExecutionRecord(BaseModel):
 
 
 class StepRecord(BaseModel):
-    """One model generation and the executions of its tool calls."""
+    """Inputs accepted before one generation, its message, and its tool executions."""
 
     model_config = ConfigDict(extra="forbid")
 
+    input_messages: list[UserMessage] = Field(default_factory=list)
     message: AssistantMessage
     generation_status: ExecutionStatus
     tools: dict[str, ToolExecutionRecord] = Field(default_factory=dict)
@@ -251,6 +309,7 @@ def messages_from_steps(steps: list[StepRecord]) -> list[Message]:
     """Return message references in model order, regardless of tool completion order."""
     messages: list[Message] = []
     for step in steps:
+        messages.extend(step.input_messages)
         messages.append(step.message)
         for call in step.message.tool_calls:
             execution = step.tools.get(call.id)
